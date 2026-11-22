@@ -1,5 +1,7 @@
 # ATLAS — fully local news intelligence
 
+![ATLAS Overview — native egui world map and local news archive](docs/assets/overview.png)
+
 ATLAS is a news workspace that runs on one machine and talks to nothing else. A local
 model decides what to search for, opens the pages it chose, reads the whole article, and
 classifies it into entities, categories and tags. Every article that survives that is
