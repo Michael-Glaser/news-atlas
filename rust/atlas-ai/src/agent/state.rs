@@ -231,6 +231,8 @@ impl AgentConfig {
 /// One typed step, for a server to stream.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
+    /// A fragment of the model's reasoning (`reasoning_content`), as it arrived.
+    Thinking { step: usize, delta: String },
     /// A fragment of the model's text, as it arrived.
     Text { step: usize, delta: String },
     /// A validated tool call. Nothing malformed ever appears here.
@@ -256,6 +258,7 @@ impl Event {
     /// A stable name for the wire, so a server does not match on variants.
     pub fn kind(&self) -> &'static str {
         match self {
+            Event::Thinking { .. } => "thinking",
             Event::Text { .. } => "text",
             Event::ToolCall { .. } => "tool_call",
             Event::ToolResult { .. } => "tool_result",
@@ -407,6 +410,9 @@ impl RepeatDetector {
 /// server that wants the whole answer accumulates the `Done` content.
 pub fn event_json(event: &Event) -> Value {
     match event {
+        Event::Thinking { step, delta } => {
+            json!({ "type": "thinking", "step": step, "delta": delta })
+        }
         Event::Text { step, delta } => json!({ "type": "text", "step": step, "delta": delta }),
         Event::ToolCall { step, call } => {
             json!({ "type": "tool_call", "step": step, "call": call.to_json() })

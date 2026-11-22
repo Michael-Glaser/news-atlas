@@ -21,11 +21,13 @@
 //! * [`http`] — the one socket: a POST to the local model on a `127.0.0.1` literal.
 //! * [`requests`] — the one file the window writes: an intent for the supervised agent.
 //! * [`setup`] — what first setup is doing, read from `data/setup.json` and never written.
+//! * [`activity`] — live AI activity and streaming reasoning, read from `data/agent-status.json`.
 //!
 //! Nothing here listens, spawns, writes the archive, or downloads. The single write is the
 //! request queue, and it is a *request*: a row the agent may claim, never an action the
 //! window takes.
 
+pub mod activity;
 pub mod agent;
 pub mod app;
 pub mod assets;

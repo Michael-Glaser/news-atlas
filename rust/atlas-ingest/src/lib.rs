@@ -98,6 +98,7 @@ pub mod fetcher;
 pub mod gate;
 pub mod handlers;
 pub mod hash;
+pub mod live;
 pub mod model;
 pub mod quality;
 pub mod read;

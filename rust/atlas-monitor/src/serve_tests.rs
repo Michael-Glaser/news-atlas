@@ -373,7 +373,9 @@ fn a_topic_add_creates_the_monitor_and_researches_it_once() {
             r#"{"topic":"Chips","query":"chip export rules","cadence_minutes":120}"#,
         )
         .expect("push");
-    assert_eq!(serve.step(), Pass::Ran(1));
+    // Fast lane creates the topic + monitor and enqueues `monitor_run`; the slow lane runs
+    // that `monitor_run` in the same step (2 actions total).
+    assert_eq!(serve.step(), Pass::Ran(2));
 
     let monitors = wired.native.service.list().expect("list");
     assert_eq!(monitors.len(), 1, "the click became a monitor");
@@ -400,9 +402,41 @@ fn a_topic_add_creates_the_monitor_and_researches_it_once() {
     // same query again on the very next iteration.
     assert_eq!(serve.step(), Pass::Idle);
     assert_eq!(wired.research.calls(), 1);
-    let line = report.lines().remove(0);
-    assert_eq!(line["kind"], "topic_add");
-    assert_eq!(line["monitor"], monitors[0].id);
+    let lines = report.lines();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["kind"], "topic_add");
+    assert_eq!(lines[0]["monitor"], monitors[0].id);
+    assert_eq!(lines[1]["kind"], "monitor_run");
+    assert_eq!(lines[1]["monitor"], monitors[0].id);
+}
+
+#[test]
+fn multiple_topic_adds_materialise_immediately_without_waiting_for_research() {
+    let tree = Tree::new("topic-add-fast-lane");
+    let queue = tree.queue();
+    let store = crate::fixtures::store();
+    let wired = wired(store.clone(), FakeResearch::new(Vec::new()), FakeEnrich::new(0));
+    let report = Kept::new();
+    let serve = serve(&queue, &wired, &report);
+
+    queue
+        .push("topic_add", r#"{"topic":"China","query":"china"}"#)
+        .expect("push");
+    queue
+        .push("topic_add", r#"{"topic":"Energy","query":"energy"}"#)
+        .expect("push");
+    queue
+        .push("topic_add", r#"{"topic":"Chips","query":"chips"}"#)
+        .expect("push");
+
+    // Fast lane drains all three topic_add rows without invoking the model at all.
+    assert_eq!(serve.drain_fast_topics(), 3);
+    assert_eq!(wired.research.calls(), 0, "no model call on the fast lane");
+    let monitors = wired.native.service.list().expect("list");
+    assert_eq!(monitors.len(), 3, "all three monitors exist right away");
+    assert!(monitors.iter().all(|m| m.topic_id.is_some()));
+    // Three monitor_run rows are now queued for the slow worker.
+    assert_eq!(queue.depth().expect("depth"), 3);
 }
 
 #[test]
@@ -421,20 +455,24 @@ fn a_topic_add_delivered_twice_leaves_one_monitor() {
 
     let payload = r#"{"topic":"Chips","query":"chip export rules","cadence_minutes":120}"#;
     queue.push("topic_add", payload).expect("push");
-    assert_eq!(serve.step(), Pass::Ran(1));
+    assert_eq!(serve.step(), Pass::Ran(2));
     queue.push("topic_add", payload).expect("push");
-    assert_eq!(serve.step(), Pass::Ran(1));
+    assert_eq!(serve.step(), Pass::Ran(2));
 
     let monitors = wired.native.service.list().expect("list");
     assert_eq!(monitors.len(), 1, "one saved query is one monitor: {monitors:?}");
     assert_eq!(wired.research.calls(), 2, "both deliveries still looked now");
-    let lines = report.lines();
-    assert_eq!(lines.len(), 2);
-    assert_eq!(lines[0]["monitor"], monitors[0].id);
+    let topic_lines: Vec<Value> = report
+        .lines()
+        .into_iter()
+        .filter(|l| l["kind"] == "topic_add")
+        .collect();
+    assert_eq!(topic_lines.len(), 2);
+    assert_eq!(topic_lines[0]["monitor"], monitors[0].id);
     assert_eq!(
-        lines[1]["monitor"], monitors[0].id,
+        topic_lines[1]["monitor"], monitors[0].id,
         "the replay reports the monitor it found: {:?}",
-        lines[1]
+        topic_lines[1]
     );
 }
 

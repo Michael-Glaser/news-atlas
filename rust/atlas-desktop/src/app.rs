@@ -494,6 +494,16 @@ pub struct Atlas {
     /// use. `None` means the acceptance is on disk for the current document version and the
     /// workspace draws as it always did.
     gate: Option<crate::views::license::Gate>,
+    /// Read-only watcher for `data/agent-status.json` (live AI phase, tool log, reasoning).
+    activity: crate::activity::Watch,
+    /// Whether the expandable AI Activity & Reasoning drawer is open.
+    activity_open: bool,
+    /// True after the user manually hides the drawer, so auto-open respects their choice.
+    activity_dismissed: bool,
+    /// Last seen `(mtime, len)` stamp of `atlas.db` and `atlas.db-wal` for live auto-refresh.
+    archive_stamp: Option<(Option<std::time::SystemTime>, u64, Option<std::time::SystemTime>, u64)>,
+    /// Last time `archive_stamp` was checked.
+    last_stamp_check: Instant,
 }
 
 impl Atlas {
@@ -535,6 +545,7 @@ impl Atlas {
             Ok(archive) => (Some(archive), String::new()),
             Err(problem) => (None, problem),
         };
+        let archive_path_for_activity = path.clone();
         let mut atlas = Atlas {
             archive,
             // Cloned once, for the graph below: the relation panel reads the archive the
@@ -585,6 +596,11 @@ impl Atlas {
             rail_choice: None,
             queue: crate::requests::queue_path(),
             gate: None,
+            activity: crate::activity::Watch::new(&archive_path_for_activity),
+            activity_open: false,
+            activity_dismissed: false,
+            archive_stamp: crate::activity::archive_stamp(&archive_path_for_activity),
+            last_stamp_check: Instant::now(),
         };
         // A fixture window has no gate: every test that drives this constructor is about the
         // workspace, and a screen that had to be clicked away first would be a test that
@@ -1236,6 +1252,9 @@ impl Atlas {
             self.draw_gate(ui);
             return;
         }
+        // Poll live background AI activity (`data/agent-status.json`) and check whether
+        // the archive on disk changed so newly added topics and articles appear automatically.
+        self.poll_live_updates();
         // Before the rail draws: the window that opened last frame is already loaded, and
         // a row the reader opened last frame is already known here — so the read this frame
         // needs happens once, not one frame late.
@@ -1279,6 +1298,17 @@ impl Atlas {
                     .inner_margin(egui::Margin::symmetric(12, 6)),
             )
             .show(ui, |ui| self.status_row(ui));
+
+        if self.activity.current().present || self.activity_open {
+            egui::Panel::bottom("ai_activity")
+                .frame(
+                    egui::Frame::NONE
+                        .fill(theme::PANEL)
+                        .stroke(egui::Stroke::new(1.0_f32, theme::HAIRLINE))
+                        .inner_margin(egui::Margin::symmetric(12, 6)),
+                )
+                .show(ui, |ui| self.activity_panel(ui));
+        }
 
         egui::CentralPanel::default()
             .frame(
@@ -1391,7 +1421,50 @@ impl Atlas {
         // The graph settles over ~2 s of frames; ask for them, then stop asking.
         if self.page == Page::Graph && self.graph.alpha > 0.005 {
             ui.ctx().request_repaint_after(Duration::from_millis(16));
+        } else if self.asks_for_briefings {
+            // In the live window, keep polling while the AI is working (fast for smooth
+            // reasoning stream) or gently while idle so newly added topics and scheduled
+            // runs appear without clicking Refresh.
+            let wait = if self.activity.current().active {
+                Duration::from_millis(400)
+            } else {
+                Duration::from_millis(1_500)
+            };
+            ui.ctx().request_repaint_after(wait);
         }
+    }
+
+    /// Poll `data/agent-status.json` and check if `atlas.db` / `-wal` changed on disk.
+    fn poll_live_updates(&mut self) {
+        if !self.asks_for_briefings && !self.activity_open {
+            return;
+        }
+        let now = Instant::now();
+        let active = self.activity.poll(now).active;
+        if active && !self.activity_dismissed {
+            self.activity_open = true;
+        }
+        if self.asks_for_briefings
+            && now.saturating_duration_since(self.last_stamp_check) >= crate::activity::STAMP_POLL
+        {
+            self.last_stamp_check = now;
+            let stamp = crate::activity::archive_stamp(&self.archive_path);
+            if stamp.is_some() && stamp != self.archive_stamp {
+                self.archive_stamp = stamp;
+                self.dirty = true;
+            }
+        }
+    }
+
+    /// Bottom live AI activity bar + expandable Activity Log & Live Reasoning drawer.
+    fn activity_panel(&mut self, ui: &mut egui::Ui) {
+        let act = self.activity.current().clone();
+        crate::activity::show(
+            ui,
+            &act,
+            &mut self.activity_open,
+            &mut self.activity_dismissed,
+        );
     }
 
     /// The smallest plate the Graph page will draw, in whole [`theme::space::UNIT`]s: 64

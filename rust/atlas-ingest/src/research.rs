@@ -115,6 +115,14 @@ impl crate::Pipeline {
         // "ids the archive gained while this pass ran" is the honest answer and the
         // only one a reader can check.
         let watermark = self.article_watermark();
+        let mut live = crate::live::LiveStatus::start(
+            crate::live::status_path_for_root(&self.config.root),
+            "research",
+            &focus,
+            "starting research",
+            config.max_steps,
+            None,
+        );
         let mut steps: Vec<Value> = Vec::new();
         let mut events = 0usize;
         let mut refused_calls = 0usize;
@@ -127,16 +135,29 @@ impl crate::Pipeline {
             &mut |event| {
                 events += 1;
                 match &event {
-                    Event::ToolCall { call, .. } => {
-                        steps.push(json!({ "tool": call.name, "args": call.args }));
+                    Event::Thinking { step, delta } => {
+                        live.push_thinking(*step, delta);
                     }
-                    Event::ToolResult { result, error, .. } => {
+                    Event::ToolCall { step, call } => {
+                        steps.push(json!({ "tool": call.name, "args": call.args }));
+                        let (phase, line) = describe_tool_call(&call.name, &call.args);
+                        live.set_phase(&phase, *step, config.max_steps, Some(&line));
+                    }
+                    Event::ToolResult {
+                        name,
+                        result,
+                        error,
+                        ..
+                    } => {
                         // The events are the *narrative*; `stored` is measured from the
                         // archive after the run. A call the loop answered from cache or
                         // trimmed for the UI is still a row, and a row is what the
                         // reader counts (see the note at `watermark`).
                         if *error && result.get("status").is_none() {
                             refused_calls += 1;
+                        }
+                        if let Some(note) = describe_tool_result(name, result, *error) {
+                            live.log(&note);
                         }
                     }
                     _ => {}
@@ -220,6 +241,12 @@ impl crate::Pipeline {
             // never called `save_article` from one whose call was refused as a duplicate,
             // stale or incomplete — and those are three different fixes.
             let mut filed_steps: Vec<Value> = Vec::new();
+            live.set_phase(
+                "filing read articles",
+                1,
+                3,
+                Some("starting filing pass for read articles"),
+            );
             let second = agent::run(
                 client.as_ref(),
                 &saver,
@@ -229,10 +256,17 @@ impl crate::Pipeline {
                 &mut |event| {
                     filed_events += 1;
                     match &event {
-                        Event::ToolCall { call, .. } => filed_steps.push(json!({
-                            "tool": call.name,
-                            "args": call.args,
-                        })),
+                        Event::Thinking { step, delta } => {
+                            live.push_thinking(*step, delta);
+                        }
+                        Event::ToolCall { step, call } => {
+                            filed_steps.push(json!({
+                                "tool": call.name,
+                                "args": call.args,
+                            }));
+                            let (phase, line) = describe_tool_call(&call.name, &call.args);
+                            live.set_phase(&phase, *step, 3, Some(&line));
+                        }
                         Event::ToolResult {
                             name,
                             result,
@@ -246,7 +280,9 @@ impl crate::Pipeline {
                                     "refused": *error,
                                 });
                             }
-                            let _ = (name, result, error);
+                            if let Some(note) = describe_tool_result(name, result, *error) {
+                                live.log(&note);
+                            }
                         }
                         _ => {}
                     }
@@ -279,26 +315,37 @@ impl crate::Pipeline {
         }
 
         match outcome {
-            Ok(outcome) => json!({
-                "ok": true,
-                "text": outcome.content,
-                "stored": stored,
-                "steps": steps,
-                "steps_taken": outcome.steps,
-                "tool_calls": outcome.tool_calls,
-                "tokens": outcome.tokens,
-                "stopped": format!("{:?}", outcome.stopped),
-                "events": events,
-                "filing": second_phase,
-            }),
-            Err(error) => json!({
-                "ok": false,
-                "error": crate::scrub(&error.to_string()),
-                "stored": stored,
-                "steps": steps,
-                "events": events,
-                "filing": second_phase,
-            }),
+            Ok(outcome) => {
+                live.log(&format!(
+                    "finished research on \"{}\": stored {} article(s)",
+                    focus,
+                    stored.len()
+                ));
+                json!({
+                    "ok": true,
+                    "text": outcome.content,
+                    "stored": stored,
+                    "steps": steps,
+                    "steps_taken": outcome.steps,
+                    "tool_calls": outcome.tool_calls,
+                    "tokens": outcome.tokens,
+                    "stopped": format!("{:?}", outcome.stopped),
+                    "events": events,
+                    "filing": second_phase,
+                })
+            }
+            Err(error) => {
+                let err_msg = crate::scrub(&error.to_string());
+                live.log(&format!("research stopped: {err_msg}"));
+                json!({
+                    "ok": false,
+                    "error": err_msg,
+                    "stored": stored,
+                    "steps": steps,
+                    "events": events,
+                    "filing": second_phase,
+                })
+            }
         }
     }
 
@@ -352,6 +399,110 @@ impl crate::Pipeline {
                 })
             })
             .collect()
+    }
+}
+
+/// Human-readable phase + log line for one tool call in the research loop.
+fn describe_tool_call(name: &str, args: &serde_json::Map<String, Value>) -> (String, String) {
+    match name {
+        "find_news" | "web_search" => {
+            let query = args
+                .get("query")
+                .or_else(|| args.get("topic"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            let short: String = query.chars().take(60).collect();
+            let phase = if short.is_empty() {
+                "searching news".to_string()
+            } else {
+                format!("searching news: \"{short}\"")
+            };
+            (phase.clone(), format!("{name}: \"{short}\""))
+        }
+        "read_article" | "web_open" => {
+            let url = args.get("url").and_then(Value::as_str).unwrap_or("");
+            let host = crate::host_of(url);
+            let label = if host.is_empty() {
+                url.chars().take(50).collect::<String>()
+            } else {
+                host
+            };
+            let phase = format!("reading article ({label})");
+            (phase, format!("{name}: {label}"))
+        }
+        "save_article" => {
+            let title = args
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            let short: String = title.chars().take(60).collect();
+            let phase = if short.is_empty() {
+                "saving article".to_string()
+            } else {
+                format!("saving article: \"{short}\"")
+            };
+            (phase, format!("save_article: \"{short}\""))
+        }
+        other => (format!("running {other}"), format!("tool: {other}")),
+    }
+}
+
+/// Concise log line for a tool result (never includes article text).
+fn describe_tool_result(name: &str, result: &Value, error: bool) -> Option<String> {
+    if error {
+        let reason = result
+            .get("error")
+            .or_else(|| result.get("reason"))
+            .and_then(Value::as_str)
+            .unwrap_or("failed");
+        return Some(format!("{name}: {}", crate::scrub(reason)));
+    }
+    match name {
+        "find_news" | "web_search" => {
+            let count = result
+                .get("results")
+                .or_else(|| result.get("items"))
+                .and_then(Value::as_array)
+                .map(|arr| arr.len())
+                .or_else(|| {
+                    result
+                        .get("count")
+                        .and_then(Value::as_u64)
+                        .map(|n| n as usize)
+                });
+            Some(match count {
+                Some(n) => format!("{name}: {n} result(s)"),
+                None => format!("{name}: done"),
+            })
+        }
+        "read_article" | "web_open" => {
+            let chars = result.get("chars").and_then(Value::as_u64).unwrap_or(0);
+            if chars > 0 {
+                Some(format!("{name}: read {chars} chars"))
+            } else if let Some(reason) = result.get("error").or_else(|| result.get("reason")).and_then(Value::as_str) {
+                Some(format!("{name}: {}", crate::scrub(reason)))
+            } else {
+                Some(format!("{name}: done"))
+            }
+        }
+        "save_article" => {
+            let status = result.get("status").and_then(Value::as_str).unwrap_or("done");
+            let id = result.get("id").and_then(Value::as_i64);
+            match (status, id) {
+                ("stored", Some(id)) => Some(format!("saved article #{id}")),
+                _ => {
+                    let reason = result
+                        .get("reason")
+                        .or_else(|| result.get("error"))
+                        .and_then(Value::as_str)
+                        .unwrap_or(status);
+                    Some(format!("save_article: {}", crate::scrub(reason)))
+                }
+            }
+        }
+        _ => None,
     }
 }
 

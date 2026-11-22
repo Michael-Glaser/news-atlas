@@ -219,6 +219,7 @@ impl<'a> Serve<'a> {
     /// One iteration under a stop the caller owns.
     pub fn step_while(&self, stop: &crate::stop::Stop) -> Pass {
         let mut ran = 0usize;
+        ran += self.drain_fast_topics();
         ran += self.claim_and_run(stop);
         ran += self.run_due();
         if ran == 0 {
@@ -230,23 +231,195 @@ impl<'a> Serve<'a> {
 
     /// The loop: one iteration, then a pause, until [`crate::stop::Stop`] says so.
     ///
+    /// A lightweight companion thread drains `topic_add` rows every [`POLL`] interval so
+    /// adding a topic (or asking the chat agent to add one) materialises in `topics` and
+    /// `monitors` immediately even while the model server is busy on a multi-minute
+    /// research pass. Research for the new topic is queued as a `monitor_run` row and
+    /// picked up by the main loop as soon as the model slot is free.
+    ///
     /// `SIGTERM` is answered between actions — the one in flight is finished and its line
     /// is printed — so a stop is never a half-written row. Returns the number of actions
     /// that ran, which the binary prints as its last line.
     pub fn run(&self, stop: &crate::stop::Stop) -> usize {
-        let mut ran = 0usize;
-        loop {
-            if stop.requested() {
-                return ran;
-            }
-            if let Pass::Ran(count) = self.step_while(stop) {
-                ran += count;
-            }
-            if stop.requested() {
-                return ran;
-            }
-            self.pause(stop);
+        if stop.requested() {
+            return 0;
         }
+        if let Some(path) = self.status_path() {
+            atlas_ingest::live::set_idle(&path, self.queued_count(), Some("agent ready"));
+        }
+        std::thread::scope(|scope| {
+            let fast = scope.spawn(|| {
+                let mut fast_ran = 0usize;
+                while !stop.requested() {
+                    fast_ran += self.drain_fast_topics();
+                    std::thread::sleep(POLL);
+                }
+                fast_ran
+            });
+            let mut ran = 0usize;
+            loop {
+                if stop.requested() {
+                    break;
+                }
+                if let Pass::Ran(count) = self.step_while(stop) {
+                    ran += count;
+                }
+                if stop.requested() {
+                    break;
+                }
+                self.pause(stop);
+            }
+            ran + fast.join().unwrap_or(0)
+        })
+    }
+
+    /// `<root>/data/agent-status.json` when the archive lives on disk, or `None` for
+    /// in-memory test stores.
+    fn status_path(&self) -> Option<std::path::PathBuf> {
+        crate::settings_set::root_of(self.native.service.store())
+            .map(|root| atlas_ingest::live::status_path_for_root(&root))
+    }
+
+    fn queued_count(&self) -> usize {
+        self.queue.depth().unwrap_or(0).max(0) as usize
+    }
+
+    /// Fast lane for `topic_add`: create/activate the `topics` + `monitors` rows
+    /// immediately (no model call) and queue a `monitor_run` for the research worker.
+    ///
+    /// Safe to run concurrently with [`Self::claim_and_run`]: it only claims `topic_add`
+    /// rows, and `claim_and_run` only claims non-`topic_add` rows.
+    pub(crate) fn drain_fast_topics(&self) -> usize {
+        let now = atlas_store::clock::iso_from_epoch(self.clock.now_epoch());
+        let claimed = match self
+            .queue
+            .claim_due_kind("topic_add", &now, STALE_AFTER_SECS, 16)
+        {
+            Ok(claimed) => claimed,
+            Err(error) => {
+                eprintln!(
+                    "atlas-monitor: the request queue did not answer: {}",
+                    crate::error::scrub(&error.to_string())
+                );
+                return 0;
+            }
+        };
+        let mut ran = 0usize;
+        for request in claimed {
+            let started = Instant::now();
+            let (acted, label) = self.apply_topic_add(&request.payload);
+            let ms = started.elapsed().as_millis() as u64;
+            let acted = Acted { ms, ..acted };
+            let _ = self.queue.finish(request.id, acted.error.as_deref());
+            self.report.line(&line("topic_add", Some(request.id), &acted));
+            if let Some(path) = self.status_path() {
+                let note = match (&acted.error, label) {
+                    (None, Some(name)) => {
+                        format!("added topic \"{name}\" (queued research)")
+                    }
+                    (Some(err), _) => format!("could not add topic: {err}"),
+                    (None, None) => "added topic (queued research)".to_string(),
+                };
+                atlas_ingest::live::record_note(&path, &note, Some(self.queued_count()));
+            }
+            ran += 1;
+        }
+        ran
+    }
+
+    /// Materialise one `topic_add` payload into `topics` + `monitors` and enqueue a
+    /// `monitor_run` for the slow research worker.
+    fn apply_topic_add(&self, raw_payload: &str) -> (Acted, Option<String>) {
+        let payload: Value = match serde_json::from_str(raw_payload) {
+            Ok(Value::Object(map)) => Value::Object(map),
+            _ => {
+                return (
+                    Acted {
+                        error: Some(
+                            "a topic_add request needs one JSON object as its payload".to_string(),
+                        ),
+                        ..Acted::default()
+                    },
+                    None,
+                );
+            }
+        };
+        let name = text_of(&payload, &["name", "topic", "query"]).unwrap_or_default();
+        let query = match text_of(&payload, &["query", "topic", "name"]) {
+            Ok(query) => query,
+            Err(error) => {
+                return (
+                    Acted {
+                        error: Some(error),
+                        ..Acted::default()
+                    },
+                    None,
+                );
+            }
+        };
+        let mut draft = match Draft::parse(
+            &name,
+            &query,
+            integer_of(&payload, "threshold"),
+            integer_of(&payload, "cadence_minutes"),
+            integer_of(&payload, "topic_id"),
+        ) {
+            Ok(draft) => draft,
+            Err(error) => {
+                return (
+                    Acted {
+                        error: Some(error.message().to_string()),
+                        ..Acted::default()
+                    },
+                    None,
+                );
+            }
+        };
+        let topic_id = match self.native.service.ensure_topic(&draft.name, &draft.query) {
+            Ok(id) => id,
+            Err(error) => {
+                return (
+                    Acted {
+                        error: Some(error.message().to_string()),
+                        ..Acted::default()
+                    },
+                    None,
+                );
+            }
+        };
+        if draft.topic_id.is_none() {
+            draft.topic_id = Some(topic_id);
+        }
+        let monitor_id = match self.native.service.add_once(&draft) {
+            Ok(id) => id,
+            Err(error) => {
+                return (
+                    Acted {
+                        error: Some(error.message().to_string()),
+                        ..Acted::default()
+                    },
+                    None,
+                );
+            }
+        };
+        let run_payload = json!({ "monitor_id": monitor_id }).to_string();
+        if let Err(error) = self.queue.push("monitor_run", &run_payload) {
+            return (
+                Acted {
+                    monitor: Some(monitor_id),
+                    error: Some(error.message().to_string()),
+                    ..Acted::default()
+                },
+                Some(draft.name),
+            );
+        }
+        (
+            Acted {
+                monitor: Some(monitor_id),
+                ..Acted::default()
+            },
+            Some(draft.name),
+        )
     }
 
     /// Wait for the next iteration, in [`POLL`] slices, and give up as soon as a stop
@@ -298,10 +471,14 @@ impl<'a> Serve<'a> {
             .min()
     }
 
-    /// Claim one due request and run it. Answers how many actions ran (0 or 1).
+    /// Claim one due request (excluding `topic_add`, which runs on the fast lane) and run
+    /// it. Answers how many actions ran (0 or 1).
     fn claim_and_run(&self, stop: &crate::stop::Stop) -> usize {
         let now = atlas_store::clock::iso_from_epoch(self.clock.now_epoch());
-        let claimed = match self.queue.claim_due(&now, STALE_AFTER_SECS, 1) {
+        let claimed = match self
+            .queue
+            .claim_due_except("topic_add", &now, STALE_AFTER_SECS, 1)
+        {
             Ok(claimed) => claimed,
             // A queue that will not answer does not kill the agent — the archive and the
             // model may still be fine, and no row was lost (nothing was claimed) — but it
@@ -319,6 +496,18 @@ impl<'a> Serve<'a> {
         let mut ran = 0usize;
         for request in claimed {
             let started = Instant::now();
+            if let Some(path) = self.status_path() {
+                let (topic, phase, max_steps) = self.describe_request_start(&request);
+                let remaining = self.queued_count().saturating_sub(1);
+                let _ = atlas_ingest::live::LiveStatus::start(
+                    path,
+                    &request.kind,
+                    &topic,
+                    &phase,
+                    max_steps,
+                    Some(remaining),
+                );
+            }
             // What the archive held before the pass: the refresh below reads what it gained
             // from the rows, so no seam has to report ids it did not write.
             let newest = crate::brief::newest_article(self.native.service.store().as_ref());
@@ -331,6 +520,16 @@ impl<'a> Serve<'a> {
             self.report
                 .line(&line(&kind, Some(request.id), &acted));
             self.refresh_briefs(&kind, &acted, newest);
+            if let Some(path) = self.status_path() {
+                let summary = match &acted.error {
+                    Some(err) => format!("{kind} failed: {err}"),
+                    None if acted.stored > 0 => {
+                        format!("{kind} done: stored {}", acted.stored)
+                    }
+                    None => format!("{kind} done"),
+                };
+                atlas_ingest::live::set_idle(&path, self.queued_count(), Some(&summary));
+            }
             ran += 1;
         }
         ran
@@ -354,6 +553,17 @@ impl<'a> Serve<'a> {
         let mut ran = 0usize;
         for monitor_id in due {
             let started = Instant::now();
+            if let Some(path) = self.status_path() {
+                let name = self.monitor_label(monitor_id);
+                let _ = atlas_ingest::live::LiveStatus::start(
+                    path,
+                    "monitor_run",
+                    &name,
+                    "scheduled monitor check",
+                    MAX_STEPS,
+                    Some(self.queued_count()),
+                );
+            }
             let newest = crate::brief::newest_article(self.native.service.store().as_ref());
             let report = self.native.service.run(monitor_id, Reason::Scheduler);
             let acted = Acted {
@@ -367,9 +577,60 @@ impl<'a> Serve<'a> {
             self.report
                 .line(&line("monitor_run", None, &acted));
             self.refresh_briefs("monitor_run", &acted, newest);
+            if let Some(path) = self.status_path() {
+                let summary = match &acted.error {
+                    Some(err) => format!("scheduled check failed: {err}"),
+                    None => format!("scheduled check done: stored {}", acted.stored),
+                };
+                atlas_ingest::live::set_idle(&path, self.queued_count(), Some(&summary));
+            }
             ran += 1;
         }
         ran
+    }
+
+    /// Human-readable `(topic, phase, max_steps)` for `data/agent-status.json`.
+    fn describe_request_start(&self, request: &Request) -> (String, String, usize) {
+        let payload = serde_json::from_str::<Value>(&request.payload).unwrap_or(Value::Null);
+        match request.kind.as_str() {
+            "research" => {
+                let q = text_of(&payload, &["query", "topic"]).unwrap_or_default();
+                (q, "starting research".to_string(), steps_of(&payload))
+            }
+            "monitor_run" => {
+                let label = monitor_of(&payload)
+                    .ok()
+                    .map(|id| self.monitor_label(id))
+                    .unwrap_or_default();
+                (label, "researching topic".to_string(), MAX_STEPS)
+            }
+            "brief" => {
+                let scope = payload
+                    .get("scope")
+                    .and_then(Value::as_str)
+                    .unwrap_or("window");
+                let key = payload.get("key").and_then(Value::as_str).unwrap_or("");
+                let label = if key.is_empty() {
+                    scope.to_string()
+                } else {
+                    format!("{scope}: {key}")
+                };
+                (label, "writing briefing".to_string(), 1)
+            }
+            "enrich" => (String::new(), "enriching articles".to_string(), 1),
+            "settings_set" => (String::new(), "applying settings".to_string(), 1),
+            other => (String::new(), format!("running {other}"), 1),
+        }
+    }
+
+    fn monitor_label(&self, monitor_id: i64) -> String {
+        self.native
+            .service
+            .get(monitor_id)
+            .ok()
+            .flatten()
+            .map(|m| m.name)
+            .unwrap_or_else(|| format!("monitor #{monitor_id}"))
     }
 
     /// Keep the reader's briefings current after an action that stored at least one story.

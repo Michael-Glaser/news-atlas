@@ -138,6 +138,16 @@ const CLAIM_SQL: &str = "UPDATE requests SET claimed_at = ?1 \
      AND (claimed_at IS NULL OR claimed_at < ?2) ORDER BY id LIMIT ?3) \
      RETURNING id, kind, payload, created_at";
 
+const CLAIM_KIND_SQL: &str = "UPDATE requests SET claimed_at = ?1 \
+     WHERE id IN (SELECT id FROM requests WHERE done_at IS NULL AND kind = ?4 \
+     AND (claimed_at IS NULL OR claimed_at < ?2) ORDER BY id LIMIT ?3) \
+     RETURNING id, kind, payload, created_at";
+
+const CLAIM_EXCEPT_SQL: &str = "UPDATE requests SET claimed_at = ?1 \
+     WHERE id IN (SELECT id FROM requests WHERE done_at IS NULL AND kind != ?4 \
+     AND (claimed_at IS NULL OR claimed_at < ?2) ORDER BY id LIMIT ?3) \
+     RETURNING id, kind, payload, created_at";
+
 const PUSH_SQL: &str =
     "INSERT INTO requests (kind, payload, created_at) VALUES (?1, ?2, ?3) RETURNING id";
 
@@ -300,6 +310,61 @@ impl Requests {
         let rows = statement
             .query_map(
                 rusqlite::params![now, stale_before, limit],
+                |row| {
+                    Ok(Request {
+                        id: row.get(0)?,
+                        kind: row.get(1)?,
+                        payload: row.get(2)?,
+                        created_at: row.get(3)?,
+                    })
+                },
+            )
+            .map_err(StoreError::from)?;
+        let mut claimed = Vec::with_capacity(limit.clamp(0, 64) as usize);
+        for row in rows {
+            claimed.push(row.map_err(StoreError::from)?);
+        }
+        Ok(claimed)
+    }
+
+    /// Claim up to `limit` open requests of exactly `kind` (used by the fast lane
+    /// for lightweight metadata actions like `topic_add`).
+    pub fn claim_due_kind(
+        &self,
+        kind: &str,
+        now: &str,
+        stale_after_secs: i64,
+        limit: usize,
+    ) -> Result<Vec<Request>> {
+        self.claim_filtered(CLAIM_KIND_SQL, kind, now, stale_after_secs, limit)
+    }
+
+    /// Claim up to `limit` open requests of any kind except `skip_kind`.
+    pub fn claim_due_except(
+        &self,
+        skip_kind: &str,
+        now: &str,
+        stale_after_secs: i64,
+        limit: usize,
+    ) -> Result<Vec<Request>> {
+        self.claim_filtered(CLAIM_EXCEPT_SQL, skip_kind, now, stale_after_secs, limit)
+    }
+
+    fn claim_filtered(
+        &self,
+        sql: &str,
+        kind: &str,
+        now: &str,
+        stale_after_secs: i64,
+        limit: usize,
+    ) -> Result<Vec<Request>> {
+        let stale_before = iso_from_epoch(parse_epoch(now) - stale_after_secs.max(0));
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let conn = self.lock();
+        let mut statement = conn.prepare(sql).map_err(StoreError::from)?;
+        let rows = statement
+            .query_map(
+                rusqlite::params![now, stale_before, limit, kind],
                 |row| {
                     Ok(Request {
                         id: row.get(0)?,

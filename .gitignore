@@ -17,6 +17,8 @@ data/chrome-profile/
 data/setup.json
 data/license.json
 data/config.json
+data/agent-status.json
+data/agent-status.json.tmp
 
 # The model weights. 8 GB of GGUF is not source: `atlas setup` fetches the file the
 # README names, into this directory, on the machine that will run it. Nothing here is

@@ -95,7 +95,7 @@ pub(super) fn ask(
     }
     let cancelled = std::cell::Cell::new(false);
     let out_of_time = std::cell::Cell::new(false);
-    let mut on_delta = |delta: &str| -> Control {
+    let mut on_chunk = |is_thinking: bool, delta: &str| -> Control {
         // The clock is checked on every fragment, which is the only place a slow
         // model can be interrupted: `complete_stream` blocks until the server or the
         // socket's own ten-minute timeout says otherwise, and by then the reader has
@@ -104,10 +104,18 @@ pub(super) fn ask(
             out_of_time.set(true);
             return Control::Cancel;
         }
-        match emit(Event::Text {
-            step,
-            delta: delta.to_string(),
-        }) {
+        let event = if is_thinking {
+            Event::Thinking {
+                step,
+                delta: delta.to_string(),
+            }
+        } else {
+            Event::Text {
+                step,
+                delta: delta.to_string(),
+            }
+        };
+        match emit(event) {
             Control::Continue => Control::Continue,
             Control::Cancel => {
                 cancelled.set(true);
@@ -115,7 +123,7 @@ pub(super) fn ask(
             }
         }
     };
-    match client.complete_stream(&request, &mut on_delta) {
+    match client.complete_stream_with_thinking(&request, &mut on_chunk) {
         Ok(reply) => {
             // A client is free to finish the call anyway; the answer it built after
             // the deadline is not one this turn can use.
@@ -145,7 +153,7 @@ pub(super) fn ask(
                 prompt_tokens = retry.tokens;
                 let mut retry_request = request;
                 retry_request.messages = messages.clone();
-                return match client.complete_stream(&retry_request, &mut on_delta) {
+                return match client.complete_stream_with_thinking(&retry_request, &mut on_chunk) {
                     Ok(reply) => {
                         if out_of_time.get() {
                             return Err(AiError::Timeout(TURN_DEADLINE_HIT.to_string()));

@@ -282,6 +282,17 @@ pub trait LlamaClient {
         on_delta: &mut dyn FnMut(&str) -> Control,
     ) -> Result<ChatReply, AiError>;
 
+    /// Streaming call that also delivers `reasoning_content` fragments live via
+    /// `on_chunk(is_thinking, delta)`. Default implementation falls back to
+    /// [`Self::complete_stream`].
+    fn complete_stream_with_thinking(
+        &self,
+        request: &ChatRequest,
+        on_chunk: &mut dyn FnMut(bool, &str) -> Control,
+    ) -> Result<ChatReply, AiError> {
+        self.complete_stream(request, &mut |delta| on_chunk(false, delta))
+    }
+
     /// Is the server answering, which model, what context size?
     fn probe(&self) -> Result<ServerInfo, AiError>;
 }
@@ -686,6 +697,20 @@ impl LlamaClient for HttpLlamaClient {
         request: &ChatRequest,
         on_delta: &mut dyn FnMut(&str) -> Control,
     ) -> Result<ChatReply, AiError> {
+        self.complete_stream_with_thinking(request, &mut |is_thinking, delta| {
+            if is_thinking {
+                Control::Continue
+            } else {
+                on_delta(delta)
+            }
+        })
+    }
+
+    fn complete_stream_with_thinking(
+        &self,
+        request: &ChatRequest,
+        on_chunk: &mut dyn FnMut(bool, &str) -> Control,
+    ) -> Result<ChatReply, AiError> {
         let mut request = request.clone();
         request.stream = true;
         let mut response = self.http.post_json(COMPLETIONS, &request.body_text())?;
@@ -710,11 +735,19 @@ impl LlamaClient for HttpLlamaClient {
                     }
                     SseEvent::Data(data) => {
                         if let Some(frame) = decode_frame(&data)? {
-                            let text = match &frame {
-                                Frame::Delta { content, .. } => content.clone(),
+                            let (text, thought) = match &frame {
+                                Frame::Delta {
+                                    content, thinking, ..
+                                } => (content.clone(), thinking.clone()),
                             };
                             aggregator.push(frame);
-                            if !text.is_empty() && on_delta(&text) == Control::Cancel {
+                            if !thought.is_empty() && on_chunk(true, &thought) == Control::Cancel {
+                                cancelled = true;
+                            }
+                            if !cancelled
+                                && !text.is_empty()
+                                && on_chunk(false, &text) == Control::Cancel
+                            {
                                 cancelled = true;
                             }
                         }
