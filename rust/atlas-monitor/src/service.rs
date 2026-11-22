@@ -183,6 +183,28 @@ impl MonitorService {
         Ok(self.store.monitors().get(id)?.as_ref().map(Monitor::from_row))
     }
 
+    /// Ensure an active topic row exists in `topics` so the Topics view shows it
+    /// immediately and `save_article`'s topic gate accepts stories from the pass.
+    pub fn ensure_topic(&self, name: &str, query: &str) -> Result<i64> {
+        let raw_name = if name.trim().is_empty() {
+            query.trim()
+        } else {
+            name.trim()
+        };
+        let topic_name: String = raw_name.chars().take(80).collect();
+        let raw_keywords = if query.trim().is_empty() {
+            raw_name
+        } else {
+            query.trim()
+        };
+        let keywords: String = raw_keywords.chars().take(800).collect();
+        let now = self.now_iso();
+        Ok(self
+            .store
+            .monitors()
+            .ensure_topic(&topic_name, &keywords, &now)?)
+    }
+
     /// Save a new monitor. It is active from the start and has never run.
     pub fn add(&self, draft: &Draft) -> Result<i64> {
         let now = self.now_iso();

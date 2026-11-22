@@ -529,7 +529,7 @@ impl<'a> Serve<'a> {
                         )
                     }
                 };
-                let draft = match Draft::parse(
+                let mut draft = match Draft::parse(
                     &name,
                     &query,
                     integer_of(&payload, "threshold"),
@@ -547,6 +547,24 @@ impl<'a> Serve<'a> {
                         )
                     }
                 };
+                // Create/activate the matching row in `topics` first so the Topics
+                // view shows it right away and `save_article`'s topic gate accepts
+                // stories collected by the research pass below.
+                let topic_id = match self.native.service.ensure_topic(&draft.name, &draft.query) {
+                    Ok(id) => id,
+                    Err(error) => {
+                        return (
+                            request.kind.clone(),
+                            Acted {
+                                error: Some(error.message().to_string()),
+                                ..Acted::default()
+                            },
+                        )
+                    }
+                };
+                if draft.topic_id.is_none() {
+                    draft.topic_id = Some(topic_id);
+                }
                 let monitor_id = match self.native.service.add_once(&draft) {
                     Ok(id) => id,
                     Err(error) => {

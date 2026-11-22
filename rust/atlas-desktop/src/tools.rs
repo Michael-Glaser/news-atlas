@@ -51,7 +51,9 @@ pub const SYSTEM: &str = "You are ATLAS: you answer questions about the news in 
 archive, and you answer only from what your tools return. Your tools read the archive: search_news \
 finds stories, get_article reads one in full, entity_profile and graph_neighbors and graph_path \
 follow the connections between entities, timeline says what happened day by day, stats says what the \
-archive holds. For any question about events, people, companies or how things are connected, call at \
+archive holds, and add_topic queues a new topic for the local agent to add and research. When the \
+user asks to add, track or follow a new topic, call add_topic with its name and optional query. For \
+any question about events, people, companies or how things are connected, call at \
 least one tool before you answer — never answer from memory, and never invent an id: article ids come \
 from tool results. Follow a lead: search first, then get_article on the best hit, and use \
 graph_neighbors or graph_path when the question is about a relationship, saying plainly which \
@@ -133,6 +135,18 @@ pub fn specs() -> Vec<Value> {
             "What the archive holds: how many stories, entities, connections and topics, and the window it covers.",
             json!({ "type": "object", "properties": {} }),
         ),
+        spec(
+            "add_topic",
+            "Queue a new news topic for the local agent to add and start researching immediately.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Short name of the topic (e.g. 'China', 'Semiconductors')." },
+                    "query": { "type": "string", "description": "Optional keywords or question describing what should count as news (defaults to name)." }
+                },
+                "required": ["name"]
+            }),
+        ),
     ]
 }
 
@@ -146,11 +160,13 @@ pub fn names() -> Vec<&'static str> {
         "graph_path",
         "timeline",
         "stats",
+        "add_topic",
     ]
 }
 
 fn spec(name: &str, description: &str, parameters: Value) -> Value {
     json!({
+        "type": "object",
         "type": "function",
         "function": { "name": name, "description": description, "parameters": parameters }
     })
@@ -176,6 +192,11 @@ pub fn call(archive: &Path, name: &str, arguments: &str) -> Result<String, Strin
             names().join(", ")
         ));
     }
+    if name == "add_topic" {
+        let queue = crate::requests::queue_beside(archive);
+        let answer = add_topic(&queue, &arguments)?;
+        return Ok(fence(&clip_chars(&answer, MAX_ANSWER)));
+    }
     let conn = open(archive)?;
     let answer = match name {
         "search_news" => search_news(&conn, &arguments),
@@ -188,6 +209,24 @@ pub fn call(archive: &Path, name: &str, arguments: &str) -> Result<String, Strin
         _ => unreachable!("names() and call() are the same list, and the name was checked"),
     }?;
     Ok(fence(&clip_chars(&answer, MAX_ANSWER)))
+}
+
+fn add_topic(queue: &Path, arguments: &Value) -> Result<String, String> {
+    let name: String = text(arguments, "name").chars().take(120).collect();
+    if name.is_empty() {
+        return Err("add_topic needs a non-empty `name`.".to_string());
+    }
+    let raw_query = text(arguments, "query");
+    let query: String = if raw_query.is_empty() {
+        name.clone()
+    } else {
+        raw_query.chars().take(600).collect()
+    };
+    let payload = crate::requests::topic_add_payload(&name, &query);
+    let id = crate::requests::push_to(queue, "topic_add", &payload)?;
+    Ok(format!(
+        "Queued topic \"{name}\" (request #{id}). The local agent will create it in Topics and Monitors and run an initial research pass."
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -884,5 +923,32 @@ mod tests {
         assert_eq!(rows_wanted(&json!({ "limit": 10_000 })), MAX_ROWS);
         assert_eq!(rows_wanted(&json!({ "limit": -3 })), 1);
         assert!(field(&"a".repeat(10_000)).chars().count() <= MAX_FIELD + 1);
+    }
+
+    #[test]
+    fn add_topic_queues_a_request_even_before_an_archive_exists() {
+        let dir = std::env::temp_dir().join(format!("atlas-tools-add-topic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let archive = dir.join("atlas.db");
+        let answer = call(&archive, "add_topic", r#"{"name":"China","query":"China trade"}"#)
+            .expect("add_topic should queue without an existing archive");
+        assert!(answer.starts_with(CONTEXT_OPEN) && answer.ends_with(CONTEXT_CLOSE));
+        assert!(answer.contains("Queued topic \"China\""), "{answer}");
+
+        let queue = crate::requests::queue_beside(&archive);
+        let conn = Connection::open(&queue).expect("queue created");
+        let (kind, payload): (String, String) = conn
+            .query_row("SELECT kind, payload FROM requests LIMIT 1", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .expect("queued row");
+        assert_eq!(kind, "topic_add");
+        let parsed: Value = serde_json::from_str(&payload).expect("json");
+        assert_eq!(parsed["name"], "China");
+        assert_eq!(parsed["query"], "China trade");
+
+        let empty = call(&archive, "add_topic", r#"{"name":"   "}"#).expect_err("empty name");
+        assert!(empty.contains("non-empty"), "{empty}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

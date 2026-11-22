@@ -306,6 +306,33 @@ impl<'a> Monitors<'a> {
         )
     }
 
+    /// Ensure an active row exists in `topics` for `name` (case-insensitive)
+    /// and return its id. An existing topic is re-activated without overwriting
+    /// its keywords or hit history.
+    pub fn ensure_topic(&self, name: &str, keywords: &str, created: &str) -> Result<i64> {
+        if let Some(id) = self
+            .store
+            .query_one(
+                "SELECT id FROM topics WHERE name=? COLLATE NOCASE",
+                &[SqlValue::Text(name.to_string())],
+            )?
+            .and_then(|row| row.int("id"))
+        {
+            self.store
+                .exec("UPDATE topics SET active=1 WHERE id=?", &[SqlValue::Integer(id)])?;
+            return Ok(id);
+        }
+        self.store.insert(
+            "INSERT INTO topics(name,keywords,exclude,min_matches,active,created,hits) \
+             VALUES(?,?,'',1,1,?,0)",
+            &[
+                SqlValue::Text(name.to_string()),
+                SqlValue::Text(keywords.to_string()),
+                SqlValue::Text(created.to_string()),
+            ],
+        )
+    }
+
     /// The name of the topic a monitor points at, or `None` when that topic is
     /// gone — a monitor outlives the topic it was made from, and a check has to be
     /// able to say so instead of failing.

@@ -105,6 +105,15 @@ pub fn queue_path() -> PathBuf {
     crate::assets::root().join("data").join("requests.db")
 }
 
+/// The queue file sitting in the same data directory as `archive`.
+pub fn queue_beside(archive: &Path) -> PathBuf {
+    archive
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .join("requests.db")
+}
+
 /// Queue one request, and answer its id.
 ///
 /// `kind` must be one of [`KINDS`]; `payload` must be JSON and at most [`MAX_PAYLOAD`]

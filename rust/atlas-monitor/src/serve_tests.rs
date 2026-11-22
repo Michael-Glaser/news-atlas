@@ -362,7 +362,8 @@ fn a_monitor_run_request_runs_that_monitor_with_the_button_reason() {
 fn a_topic_add_creates_the_monitor_and_researches_it_once() {
     let tree = Tree::new("topic-add");
     let queue = tree.queue();
-    let wired = wired(crate::fixtures::store(), FakeResearch::new(Vec::new()), FakeEnrich::new(0));
+    let store = crate::fixtures::store();
+    let wired = wired(store.clone(), FakeResearch::new(Vec::new()), FakeEnrich::new(0));
     let report = Kept::new();
     let serve = serve(&queue, &wired, &report);
 
@@ -378,6 +379,15 @@ fn a_topic_add_creates_the_monitor_and_researches_it_once() {
     assert_eq!(monitors.len(), 1, "the click became a monitor");
     assert_eq!(monitors[0].query, "chip export rules");
     assert_eq!(monitors[0].cadence_minutes, 120);
+    assert!(
+        monitors[0].topic_id.is_some(),
+        "topic_add must create and link an active topic row"
+    );
+    let topic_name = store
+        .monitors()
+        .topic_name(monitors[0].topic_id.unwrap())
+        .expect("topic_name");
+    assert_eq!(topic_name.as_deref(), Some("Chips"));
     assert_eq!(wired.research.calls(), 1, "and it was researched now");
     let runs = wired
         .native
