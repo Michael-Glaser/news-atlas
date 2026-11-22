@@ -97,8 +97,17 @@ pub const DEFAULT_SHA256: &str = "8d33af536e35805967c9f4d77e1ed62b8212bdee282c80
 /// are HF's own file hosts, not a third party: the URL above is the only address that
 /// was chosen. If HF ever delivers from a host that is not listed here, the refusal
 /// prints the exact `redirect_hosts` line to add, so the fix is one copy-paste.
-const DEFAULT_REDIRECT_HOSTS: &[&str] =
-    &["cdn-lfs.huggingface.co", "cdn-lfs-us-1.huggingface.co", "cas-bridge.xethub.hf.co"];
+const DEFAULT_REDIRECT_HOSTS: &[&str] = &[
+    "cdn-lfs.huggingface.co",
+    "cdn-lfs-us-1.huggingface.co",
+    "cdn-lfs-eu-1.huggingface.co",
+    "cdn-lfs.hf.co",
+    "cdn-lfs-us-1.hf.co",
+    "cdn-lfs-eu-1.hf.co",
+    "cas-bridge.xethub.hf.co",
+    "us.aws.cdn.hf.co",
+    "eu.aws.cdn.hf.co",
+];
 
 /// The pin, as written in `models/model.json`.
 #[derive(Clone, Debug, PartialEq, Eq)]
