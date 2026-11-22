@@ -1,0 +1,42 @@
+[package]
+name = "atlas-desktop"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+rust-version = "1.85"
+description = "ATLAS as a native window: no browser, no HTML, one loopback client for the model."
+publish = false
+
+# Two targets, one product. The library is what the tests link (`atlas_desktop::data`),
+# the binary is the six lines that open a window — a binary crate cannot be linked by its
+# own integration tests, and the workaround (each test `#[path]`-including `src/…`) made
+# private items unreachable and needed a duplicated module under `tests/support/`.
+[lib]
+name = "atlas_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "atlas-desktop"
+path = "src/main.rs"
+
+[dependencies]
+# Pinned exactly, like every dependency in this workspace (atlas-guard enforces it).
+eframe = { version = "=0.37.0", default-features = false, features = ["default_fonts", "glow"] }
+egui = { version = "=0.37.0", default-features = false }
+rusqlite = { version = "=0.43.0", default-features = false, features = ["bundled"] }
+# Every platform: the request queue's payloads are JSON, and the pages that write them are
+# compiled everywhere. This line used to sit in the target table below because the engine
+# was the only user of it; the shell and `requests` read and write JSON on Linux too, so a
+# Linux build would have failed on a crate that was not there.
+serde_json = { version = "=1.0.154", default-features = false, features = ["std"] }
+# The reader's page view: a real web engine, in this process, as a child view of the window.
+#
+# macOS and Windows only, and deliberately: `wry` builds against the *system* web view
+# (WKWebView, WebView2), which ships with the operating system — nothing is downloaded to make
+# a page render. On Linux the same crate needs WebKitGTK (a package the reader would have to
+# install before the app can even build), so the Linux build keeps the text reader: a page is
+# still read, it is just not rendered by an engine. `src/webview.rs` says which of the two a
+# build is, and the page falls back to the text when no engine can be created at run time.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+wry = { version = "=0.57.3", default-features = false }

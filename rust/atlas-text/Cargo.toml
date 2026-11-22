@@ -1,0 +1,7 @@
+[package]
+name = "atlas-text"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+description = "ATLAS text core: cleaning, tokenising, titles, publishers, canonical URLs (std only)"

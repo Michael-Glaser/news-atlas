@@ -1,0 +1,25 @@
+[package]
+name = "atlas-core"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+description = "Dependency-free JSON-in/JSON-out helpers for the ATLAS pipeline"
+
+[[bin]]
+name = "atlas-core"
+path = "src/main.rs"
+
+[dependencies]
+
+[dev-dependencies]
+# Test-only: the deterministic mutation generator (`atlas-guard/src/mutate.rs`).
+# `atlas-guard` has no dependencies of its own, and the shipped binary stays
+# dependency-free.
+atlas-guard = { path = "../atlas-guard" }
+
+# No `[profile.release]` here, on purpose: cargo ignores a profile in a workspace
+# member (it prints a warning and uses the root's), so a member that carried one
+# was claiming `lto`/`panic=abort` that this build never applied. The one profile
+# that ships is `rust/Cargo.toml`'s `[profile.release]`, and
+# `atlas-guard/tests/audit_manifest.rs` fails if a member grows another.

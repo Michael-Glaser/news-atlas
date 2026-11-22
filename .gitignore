@@ -1,0 +1,44 @@
+# Runtime state and third-party blobs — never part of the tree.
+#
+# `data/atlas.db` is the archive; `data/requests.db` is the queue the window writes
+# and the agent claims, in its own file so the window never has a writable handle on
+# the archive. Both are per-machine, created on first run, and neither is source.
+# The `data/*.db-wal` and `data/*.db-shm` lines are SQLite's own siblings of either
+# database; the rest is what a run leaves behind (logs, the pid lock, the page cache,
+# the browser profile).
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.lock
+data/*.log
+data/cache/
+data/chrome-profile/
+# The installer's own records and per-machine user settings (never source).
+data/setup.json
+data/license.json
+data/config.json
+
+# The model weights. 8 GB of GGUF is not source: `atlas setup` fetches the file the
+# README names, into this directory, on the machine that will run it. Nothing here is
+# committed, and the repository stays small enough to clone in a second.
+models/*
+!models/.gitkeep
+
+# Built artifacts: the Rust target tree, the model server built from the vendored tree,
+# the window's assets generated at build time.
+rust/target/
+bin/
+tools/llama.cpp/build/
+tools/llama.cpp/*.log
+tools/llama.cpp/models/
+# The wasm frontend is a *build product* (`rust/build-ui.sh` writes it): 11 MB of
+# generated JavaScript, wasm and tiles that no shipped binary reads any more — the app
+# is the native window. The vendored geo data next to it (`public/vendor/`) is source
+# and stays.
+public/ui/
+
+# Editors and the OS.
+.DS_Store
+.idea/
+.vscode/
+*.swp

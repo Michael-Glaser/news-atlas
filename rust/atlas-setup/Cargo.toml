@@ -1,0 +1,37 @@
+[package]
+name = "atlas-setup"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# The install-side tool. It is NOT linked into any binary the app runs and nothing
+# in the app spawns it: `atlas start` never touches this crate's code. It exists so
+# that a fresh machine can be provisioned by ATLAS itself instead of by a paragraph
+# of instructions — the model file, and the model server built from the vendored
+# llama.cpp tree.
+#
+# Every download it performs is an INSTALL step a human starts, on purpose, with
+# the URL printed before anything is fetched. Nothing here runs at app run time.
+
+[[bin]]
+name = "atlas-setup"
+path = "src/main.rs"
+
+[dependencies]
+# The address rule, not the transport: `atlas-net`'s `approved_addresses_with` is the one
+# filter that refuses a name answering with a loopback, link-local or LAN address, and
+# `check_hop_from` is the one redirect judge. The download itself still streams through
+# this crate's own agent (a 6.5 GB body cannot become an `atlas_net::Page`), so this is a
+# check before the dial — see the module doc in `model.rs` for what that leaves open.
+atlas-net = { path = "../atlas-net" }
+atlas-guard = { path = "../atlas-guard" }
+# The settings file is `atlas-config`'s to write: one validation, one clamp, one
+# hardening note, one atomic 0600 write. A second implementation here would be a second
+# answer to "which model does ATLAS serve". A path dependency, not a new crate.
+atlas-config = { path = "../atlas-config" }
+atlas-platform = { path = "../atlas-platform" }
+serde_json = { workspace = true }
+ureq = { workspace = true }
+url = { workspace = true }

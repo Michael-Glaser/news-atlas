@@ -1,0 +1,32 @@
+[package]
+name = "atlas-store"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+description = "ATLAS persistence layer: schema, migrations, FTS5 search, dedupe, retention (port of server/db.py)"
+
+# Library first: the server, the graph and the ingest pipeline will all decide
+# what is stored in the same place. The binary below is the same code with
+# argv/stdin, so Python can adopt it one call at a time.
+[lib]
+name = "atlas_store"
+path = "src/lib.rs"
+
+[[bin]]
+name = "atlas-store"
+path = "src/main.rs"
+
+[dependencies]
+# No `serde` here: the store reads and writes `serde_json::Value`, never a derived
+# struct, and `cargo`'s `unused_dependencies` lint says so out loud. A dependency
+# that is declared but not compiled into a crate is still a manifest someone reads
+# as "the store derives types from model output", which it does not.
+serde_json = { workspace = true }
+rusqlite = { workspace = true }
+# The file modes and the ACL answer are platform decisions, asked for once.
+atlas-platform = { path = "../atlas-platform" }
+# Workspace-internal path dependency (no version, no registry entry): the
+# credential-shaped-value decision and error scrubbing are atlas-guard's, and
+# this crate must call them rather than re-implement them.
+atlas-guard = { path = "../atlas-guard" }

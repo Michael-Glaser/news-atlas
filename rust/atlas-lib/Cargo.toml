@@ -1,0 +1,26 @@
+[package]
+name = "atlas-lib"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+description = "Dependency-free shared foundations (JSON, CLI contract) for the ATLAS native binaries"
+
+[lib]
+name = "atlas_lib"
+path = "src/lib.rs"
+
+[dependencies]
+
+[dev-dependencies]
+# Test-only, and only for the mutation generator in `atlas-guard/src/mutate.rs`:
+# a fuzz test that is not deterministic is not a test. `atlas-guard` has no
+# dependencies of its own, so the shipped `atlas-lib` stays dependency-free and
+# this does not create a cycle.
+atlas-guard = { path = "../atlas-guard" }
+
+# No `[profile.release]` here, on purpose: cargo ignores a profile in a workspace
+# member (it prints a warning and uses the root's), so a member that carried one
+# was claiming `lto`/`panic=abort` that this build never applied. The one profile
+# that ships is `rust/Cargo.toml`'s `[profile.release]`, and
+# `atlas-guard/tests/audit_manifest.rs` fails if a member grows another.

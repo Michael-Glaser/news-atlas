@@ -1,0 +1,14 @@
+[package]
+name = "atlas-dates"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+description = "ATLAS native helper: atlas-dates (std-only, JSON in / JSON out)"
+
+[[bin]]
+name = "atlas-dates"
+path = "src/main.rs"
+
+[dependencies]
+atlas-lib = { path = "../atlas-lib" }

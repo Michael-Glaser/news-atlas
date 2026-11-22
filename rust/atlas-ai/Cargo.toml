@@ -1,0 +1,30 @@
+[package]
+name = "atlas-ai"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+description = "ATLAS native crate: atlas-ai — the local model (llama.cpp over loopback), the tool-call protocol, the agent loop, the tuned prompts"
+
+# Library first: the server bridge and `main.rs` drive the same `LlamaClient` and
+# the same agent loop, so a step is budgeted and validated identically whichever
+# entry point asks for it.
+[lib]
+name = "atlas_ai"
+path = "src/lib.rs"
+
+[[bin]]
+name = "atlas-ai"
+path = "src/main.rs"
+
+[dependencies]
+# Path deps, never versions: these are workspace members, and their own external
+# deps are pinned once in the workspace `[workspace.dependencies]` table.
+#   atlas-guard — every text/address rule (clean_text, loopback verdict). The
+#                 model speaks untrusted input; this crate asks, it never decides.
+#   atlas-config — the CLI reads `llama_port` / `model_local` from it. The
+#                 *library* takes its endpoint from the caller, never from here.
+atlas-guard = { path = "../atlas-guard" }
+atlas-config = { path = "../atlas-config" }
+serde = { workspace = true }
+serde_json = { workspace = true }

@@ -1,0 +1,29 @@
+[package]
+name = "atlas-net"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+description = "ATLAS native crate: atlas-net — the one HTTP client (gated redirects, byte caps, charset decoding)"
+
+# Library first: the collector bridge and `main.rs` call the same `Client`, so a
+# page is gated and capped the same way whichever entry point asks for it.
+[lib]
+name = "atlas_net"
+path = "src/lib.rs"
+
+[[bin]]
+name = "atlas-net"
+path = "src/main.rs"
+
+[dependencies]
+# Path deps, never versions: these two are workspace members, pinned by the
+# workspace `[workspace.dependencies]` table for everything that is external.
+atlas-guard = { path = "../atlas-guard" }
+atlas-lib = { path = "../atlas-lib" }
+# The platform token in the User-Agent is a platform answer, so it is asked for.
+atlas-platform = { path = "../atlas-platform" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ureq = { workspace = true }
+url = { workspace = true }

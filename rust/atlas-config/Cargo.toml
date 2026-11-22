@@ -1,0 +1,29 @@
+[package]
+name = "atlas-config"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+description = "ATLAS configuration core: the SPEC table, env + data/config.json, derived paths, the loopback invariant, spawn_env, the no-download audit (port of server/config.py)"
+
+# Library first: the server, the ingest pipeline and every spawn site ask the
+# same questions, so the answers live here and not in a copy per binary. The
+# binary below is the same code with argv/stdin, so Python can adopt it one call
+# at a time (server/configcore.py).
+[lib]
+name = "atlas_config"
+path = "src/lib.rs"
+
+[[bin]]
+name = "atlas-config"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = { workspace = true }
+# Workspace-internal path dependency (no version, no registry entry): the
+# loopback decision and the log redaction are atlas-guard's, and this crate must
+# call them rather than re-implement them.
+atlas-guard = { path = "../atlas-guard" }
+# Every platform answer this crate applies — path text, containment, the layout,
+# the file modes, the spawn environment — is asked for here, never re-derived.
+atlas-platform = { path = "../atlas-platform" }

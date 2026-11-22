@@ -1,0 +1,31 @@
+[package]
+name = "atlas-graph"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+description = "ATLAS native helper: atlas-graph (relation layer: engine + the graph tables)"
+
+[[bin]]
+name = "atlas-graph"
+path = "src/main.rs"
+
+[dependencies]
+atlas-lib = { path = "../atlas-lib" }
+# Platform answers (the `.exe` suffix, the `PATH` search): asked for, not
+# re-derived, so the harness names exactly what the build produced.
+atlas-platform = { path = "../atlas-platform" }
+atlas-store = { path = "../atlas-store" }
+# The one rule for what name the graph may hold (`prompts::entity_name`: markup
+# out, control and bidi characters out, refused if too short, too long or not a
+# phrase). Page text and model output both reach `link_article`, and a second
+# spelling of that rule here is how two answers to "is this a name" start to
+# disagree — `atlas-ingest` applies the same one to an entity it reads out of an
+# enrichment answer. `atlas-ai` depends on `atlas-guard`/`atlas-config` only, so
+# this adds no cycle (`atlas-graph` is below `atlas-ingest`, never above it).
+atlas-ai = { path = "../atlas-ai" }
+# Which characters may be stored at all — the control and bidi characters, the
+# layout collapse (`cleantext::clean`). A relation label is page text with a model
+# in between, so the rule for it asks the same crate every other text rule asks.
+atlas-guard = { path = "../atlas-guard" }
+rusqlite = { workspace = true }

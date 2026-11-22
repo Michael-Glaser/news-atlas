@@ -1,0 +1,46 @@
+[package]
+name = "atlas-monitor"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+description = "ATLAS topic monitoring: saved queries, one-shot checks through the research pipeline, alerts, the scheduler (port of server/monitor.py)"
+
+# Library first: the server, the agent tools and the bridge all ask the same
+# questions ("who is due", "what is new", "may this alert fire"), so the answers
+# live here and not in a copy per caller. The binary below is the same code with
+# argv/stdin, in the shape `server/monitorcore.py` expects.
+[lib]
+name = "atlas_monitor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "atlas-monitor"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace members by path, never by version. Each one owns a rule this crate
+# applies and must never re-derive:
+#   atlas-store   — the monitor/alert tables, their SQL, the check log
+#   atlas-ingest  — the research pipeline a check drives (search → read → classify → store)
+#   atlas-ai      — the model client and the "is this news reporting" verdict prompt
+#   atlas-guard   — the untrusted-text cleaning every stored string goes through
+#   atlas-config  — the paths a one-shot CLI call resolves
+#   atlas-lib     — the JSON/CLI contract every binary in this workspace speaks
+atlas-store = { path = "../atlas-store" }
+atlas-ingest = { path = "../atlas-ingest" }
+atlas-ai = { path = "../atlas-ai" }
+atlas-guard = { path = "../atlas-guard" }
+atlas-config = { path = "../atlas-config" }
+# The one place a child of ATLAS is built: `env_clear` plus the curated allowlist, and the
+# Windows-only console detail in a single file. The agent starts exactly one program
+# (`atlas-setup --import-model`), so it goes through the same boundary the launcher does
+# instead of building a `Command` here. Path member, not a crate from the registry.
+atlas-platform = { path = "../atlas-platform" }
+atlas-lib = { path = "../atlas-lib" }
+serde_json = { workspace = true }
+# For `SIGTERM`/`SIGINT` in `serve`: the same signal API the launcher uses (the workspace
+# has no `libc` and no `unsafe`, and a loop that cannot hear a polite stop leaves its
+# claimed request to expire instead of finishing it). No server feature is named: this
+# crate opens no listener, and `net`/`http*` stay out of its manifest.
+tokio = { workspace = true, features = ["rt", "signal"] }

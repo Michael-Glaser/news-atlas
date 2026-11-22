@@ -1,0 +1,14 @@
+[package]
+name = "atlas-topics"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+description = "ATLAS native helper: atlas-topics (std-only, JSON in / JSON out)"
+
+[[bin]]
+name = "atlas-topics"
+path = "src/main.rs"
+
+[dependencies]
+atlas-lib = { path = "../atlas-lib" }

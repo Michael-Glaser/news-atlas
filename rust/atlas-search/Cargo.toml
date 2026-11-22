@@ -1,0 +1,39 @@
+[package]
+name = "atlas-search"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+description = "ATLAS search: the tool the model calls to find news — one configurable HTML search endpoint over atlas-net, parsed into ranked hits"
+
+# Library first: the tool handlers, the server and the bridge all drive the same
+# parser and the same ranking, so a result page is read one way only. The binary
+# below is the same code with argv/stdin.
+[lib]
+name = "atlas_search"
+path = "src/lib.rs"
+
+[[bin]]
+name = "atlas-search"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace members by path, never by version. Each one owns a rule this crate
+# applies and must never re-derive:
+#   atlas-net    — the one HTTP client (gated redirects, byte caps, charset)
+#   atlas-guard  — what a URL may be, what untrusted text looks like cleaned
+#   atlas-core   — the tag scanner, entity decoding and the similarity primitive
+#   atlas-lib    — the JSON/argv contract every ATLAS binary speaks
+atlas-net = { path = "../atlas-net" }
+# Platform answers (the `.exe` suffix, the `PATH` search): asked for, not
+# re-derived, so the harness names exactly what the build produced.
+atlas-platform = { path = "../atlas-platform" }
+atlas-guard = { path = "../atlas-guard" }
+atlas-core = { path = "../atlas-core" }
+atlas-lib = { path = "../atlas-lib" }
+serde_json = { workspace = true }
+# Joining a relative `href` against the engine's base and decoding the engine's
+# own redirect wrapper (`?uddg=`, `?u=a1…`) is URL parsing, not a decision this
+# crate should hand-roll. The same crate `atlas-net` gates with, pinned once in
+# the workspace table.
+url = { workspace = true }

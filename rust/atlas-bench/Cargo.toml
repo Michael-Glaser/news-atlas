@@ -1,0 +1,41 @@
+[package]
+name = "atlas-bench"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+description = "ATLAS measurement harness: the store and pipeline paths, timed in release mode (no criterion, no network)"
+
+# Library first, binary second, exactly as the other crates: `lib.rs` is the
+# harness, `main.rs` is argv and the table. The library target exists so
+# `tests/budgets.rs` can run the same code the binary runs — a budget is only a
+# rule if a test enforces it.
+[lib]
+name = "atlas_bench"
+path = "src/lib.rs"
+
+[[bin]]
+name = "atlas-bench"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace pins, never a version here.
+serde_json = { workspace = true }
+# Workspace members. The harness measures the shipped code; it owns no rule of
+# its own and re-implements nothing.
+atlas-store = { path = "../atlas-store" }
+# Platform answers (the `.exe` suffix, the `PATH` search): asked for, not
+# re-derived, so the harness names exactly what the build produced.
+atlas-platform = { path = "../atlas-platform" }
+atlas-graph = { path = "../atlas-graph" }
+atlas-ingest = { path = "../atlas-ingest" }
+atlas-core = { path = "../atlas-core" }
+atlas-places = { path = "../atlas-places" }
+atlas-lib = { path = "../atlas-lib" }
+
+# Removed with the web face (this task): axum, tower, futures-core, tokio,
+# atlas-web and atlas-ui, plus the `ui-measure` feature. `server.rs`,
+# `startup.rs` and `ui_paths.rs` measured the HTTP routes, the exec-to-socket
+# time and the wasm bundle; there is no route, no socket and no bundle left to
+# measure, and a harness that cannot build is a harness nobody runs. `atlas-config`
+# went too: nothing in the remaining paths read it.

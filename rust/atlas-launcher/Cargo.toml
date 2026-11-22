@@ -1,0 +1,38 @@
+[package]
+name = "atlas-launcher"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+description = "ATLAS entry point: `atlas start` (the model server child, then the native window, in that order) and `atlas doctor` (what a fresh machine is missing)"
+
+# The binary is the product; the library exists so a test can drive the boot
+# sequence, the supervisor and the doctor without a terminal.
+[lib]
+name = "atlas_launcher"
+path = "src/lib.rs"
+
+[[bin]]
+name = "atlas"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace-pinned externals, never a version here. `signal` is the Ctrl-C handler
+# and `rt-multi-thread` the runtime that carries the stop flag to every wait in the
+# boot; nothing here is a server, and no feature below asks tokio for one (`net` is
+# the model server's loopback health probe, outbound only).
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "net", "time"] }
+# Workspace members. Every rule is asked for, never copied:
+#   atlas-config  — settings, derived paths, the loopback invariant, spawn_env
+#   atlas-store   — the database the window reads and the doctor probes
+#   atlas-platform — the `.exe` suffix, the `PATH` search, the child's environment
+#
+# atlas-web and atlas-browser are deliberately **not** here. The product is one
+# native window (`atlas-desktop`, started as a child below); the listener crate
+# and the reader-browser crate are legacy surface that no shipped binary may
+# reach. They still exist as libraries for the ingest side, and
+# `atlas-guard/tests/reachability.rs` is what proves they stayed out of this
+# closure. The launcher opens no listening socket and starts no browser.
+atlas-config = { path = "../atlas-config" }
+atlas-platform = { path = "../atlas-platform" }
+atlas-store = { path = "../atlas-store" }

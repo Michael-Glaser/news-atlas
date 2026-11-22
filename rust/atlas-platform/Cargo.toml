@@ -1,0 +1,12 @@
+[package]
+name = "atlas-platform"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+description = "ATLAS platform core: which OS this build is for, where the data dir and the model are, how a file is made private, where the browser is, how a child is spawned with a curated environment, and whether a path is inside the app root (Windows-shaped input understood on every platform)"
+
+# Deliberately has no dependencies at all, not even serde: every other crate asks
+# this one, so it must be usable from the server, the binaries, and the wasm32
+# frontend (which cannot link a host-only crate).
+[dependencies]

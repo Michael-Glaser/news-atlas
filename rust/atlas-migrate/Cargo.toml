@@ -1,0 +1,32 @@
+[package]
+name = "atlas-migrate"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+description = "ATLAS archive carry-over: verify, normalize and re-derive an existing data/atlas.db"
+
+# Library first, like every other crate here: the checks and the fixes are the
+# same code the binary runs, and a test drives them without a shell.
+[lib]
+name = "atlas_migrate"
+path = "src/lib.rs"
+
+[[bin]]
+name = "atlas-migrate"
+path = "src/main.rs"
+
+[dependencies]
+# The archive is opened read-only through rusqlite for verification (atlas-store
+# has no read-only open) and read-write through atlas-store for every fix, so
+# nothing is written outside the store's statement layer.
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+atlas-store = { path = "../atlas-store" }
+# The rule engines (publisher, place, topics, dates) and the model pass are
+# atlas-ingest's: this crate calls them, it never re-derives what they decide.
+atlas-ingest = { path = "../atlas-ingest" }
+atlas-ai = { path = "../atlas-ai" }
+atlas-lib = { path = "../atlas-lib" }

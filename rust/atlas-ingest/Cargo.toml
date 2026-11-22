@@ -1,0 +1,53 @@
+[package]
+name = "atlas-ingest"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+description = "ATLAS ingestion: the read/classify/store pipeline (port of server/ingest.py + server/enrichment.py)"
+
+# Library first: the tool handlers, the server and the bridge all drive the same
+# pipeline, so a gate cannot exist twice. The binary below is the same code with
+# argv/stdin, in the shape `server/ingestcore.py` expects.
+[lib]
+name = "atlas_ingest"
+path = "src/lib.rs"
+
+[[bin]]
+name = "atlas-ingest"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace members by path, never by version. Each one owns a rule this crate
+# applies and must never re-derive:
+#   atlas-guard   — URL/IP gate, cleantext (control/bidi), sanitising
+#   atlas-store   — SQLite: schema, queries, dedupe, the 72 h window value
+#   atlas-net     — the one HTTP client (gated redirects, byte caps)
+#   atlas-ai      — the model client, the tuned prompts, the tool protocol, the loop
+#   atlas-graph   — entity linking (junk-name filters, co-occurrence edges)
+#   atlas-lib     — the JSON every binary in this workspace speaks
+#
+# All five rule engines are asked in-process rather than as a child process: their
+# binaries are the same program as their library entry point (`run(cmd, raw)`), so
+# a spawn per question would buy nothing but 2–4 ms for tens of microseconds of
+# work. `crate::rules` says why, and `rules::tests` asks the binaries the same
+# questions to prove the two transports cannot drift.
+atlas-text = { path = "../atlas-text" }
+atlas-core = { path = "../atlas-core" }
+atlas-places = { path = "../atlas-places" }
+atlas-topics = { path = "../atlas-topics" }
+atlas-dates = { path = "../atlas-dates" }
+atlas-guard = { path = "../atlas-guard" }
+atlas-store = { path = "../atlas-store" }
+atlas-net = { path = "../atlas-net" }
+atlas-ai = { path = "../atlas-ai" }
+atlas-graph = { path = "../atlas-graph" }
+atlas-lib = { path = "../atlas-lib" }
+# Platform answers: the `.exe` suffix, an executable file's verdict, and the
+# curated environment every child process starts with.
+atlas-platform = { path = "../atlas-platform" }
+serde_json = { workspace = true }
+# The transaction body is handed the connection (`Store::in_transaction`), so the
+# statements in it are written against rusqlite's own API — pinned once in the
+# workspace table, never a version here.
+rusqlite = { workspace = true }

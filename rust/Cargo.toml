@@ -1,0 +1,125 @@
+# ATLAS — the native workspace. Every binary the app runs is built from here.
+#
+#   cargo build --release   ->  rust/target/release/atlas-*
+#
+# The direction is one-way: this workspace is the product, and the Python layer
+# it replaces is deleted module by module (docs/RUST-MIGRATION.md).
+#
+# Dependencies are allowed from here on (the user's decision, 2026-11): TLS,
+# SQLite and an HTTP server cannot be hand-written, and "100 % Rust" is only
+# real if those pieces are real. They are pinned in one place — this table — so
+# `cargo vendor` produces one reproducible, offline-buildable tree. Nothing is
+# fetched at run time, ever.
+#
+# How this table is kept honest (each rule has a test, `cargo test -p atlas-guard`):
+#
+# 1. **Exact versions.** Every entry says `=x.y.z`, never `^x.y.z`. A caret pin is
+#    a range: `cargo update` inside it silently swaps the bytes that decide whether
+#    a URL may be opened and how a page is decoded, and the SBOM in this file would
+#    still look pinned. `=` makes the manifest and `Cargo.lock` say the same thing,
+#    and `--locked` (which every build script passes) refuses to build if they
+#    ever disagree.
+# 2. **`default-features = false` everywhere a default is not wanted.** A default
+#    feature is somebody else's idea of what this binary needs; it is also how a
+#    decompressor, an `eval` binding or a system-library probe arrives without
+#    anyone deciding to add it. The features named here are the whole of what each
+#    crate may compile in.
+# 3. **No `git`, no second registry, no `[patch]`/`[replace]`.** A dependency comes
+#    from crates.io at a version with a checksum in `Cargo.lock`, or it does not
+#    come at all. `audit_manifest.rs` fails on a `git+` source in the lock.
+# 4. **No build script of our own.** Seventeen crates in the resolved graph run
+#    code at build time (they are listed in `atlas-guard/tests/audit_manifest.rs`,
+#    with the command that produced the list, and a test that fails when the set
+#    grows); none of them is ours, and no member may add a `build.rs` or a
+#    `[build-dependencies]` table without that list changing.
+[workspace]
+resolver = "2"
+members = [
+    "atlas-lib",
+    "atlas-core",
+    "atlas-guard",
+    "atlas-config",
+    "atlas-platform",
+    "atlas-text",
+    "atlas-places",
+    "atlas-graph",
+    "atlas-topics",
+    "atlas-dates",
+    "atlas-store",
+    "atlas-net",
+    "atlas-search",
+    "atlas-ai",
+    "atlas-ingest",
+    "atlas-monitor",
+    "atlas-migrate",
+    # The measurement harness: the paths a user hits, timed in release mode.
+    # A member so `cargo build --release --offline` builds it with everything else.
+    "atlas-bench",
+    # Provisioning a fresh machine: the model file and the model server built from the
+    # vendored llama.cpp tree. Not linked into any app binary and never spawned by
+    # `atlas start`; see the crate's header.
+    "atlas-setup",
+    # The single entry point: `atlas start` / `atlas doctor`. It is the last member
+    # because it depends on the others — it starts them, it does not replace them.
+    # The product's face: a native window (egui), no browser of any kind.
+    "atlas-desktop",
+    "atlas-launcher",
+]
+
+[workspace.package]
+license = "Apache-2.0"
+repository = "https://github.com/Michael-Glaser/news-atlas"
+
+[workspace.dependencies]
+# `derive` is needed (`atlas-net`, `atlas-ai`, `atlas-migrate` and the agent all write
+# `#[derive(Serialize)]`); `std` is named explicitly so a future serde default cannot
+# add `rc`/`unstable` behind our back.
+serde = { version = "=1.0.229", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "=1.0.154", default-features = false, features = ["std"] }
+# SQLite, statically bundled: no system library, no package manager, the same
+# bytes on macOS and Windows. `bundled` compiles `sqlite3.c` with the C compiler
+# through `cc` (a build step; it reads no network).
+#
+# `default-features = false` matters here: rusqlite 0.43 defaults are
+# `["cache", "ffi-sqlite-wasm-rs"]`. `cache` links `hashlink` (an LRU statement
+# cache) for a `prepare_cached` this app never calls, and `ffi-sqlite-wasm-rs`
+# adds `sqlite-wasm-rs` + `rsqlite-vfs` to the lock — two crates no supported
+# target of ours compiles, and two more manifests an offline build would have to
+# fetch before it could prove it resolved. The store is written with plain
+# `prepare`; that is the whole of what it needs.
+rusqlite = { version = "=0.43.0", default-features = false, features = ["bundled"] }
+# TLS through rustls + webpki roots (`rustls` is ureq's default; naming it here is
+# what keeps certificate verification on — `Client::verifies_tls` asserts it).
+#
+# Everything else ureq defaults to is refused on purpose:
+# * `gzip` pulls `flate2` and decompresses an answer *inside the transport*, below
+#   this app's 4 MB body cap. The cap bounds the bytes read, not the bytes the
+#   decompressor allocates on the way there, and it bypasses `atlas-net`'s own
+#   "a compressed answer is not a page" branch (`fetch::exchange`) by stripping the
+#   `Content-Encoding` header first. Off: that branch is the one that decides.
+# * `charset` pulls `encoding_rs` (+ `simdutf8`, + `core_detect` on x86_64) to
+#   decode a body into a `String`. `atlas-net` never asks ureq for a `String`: it
+#   reads bytes with `into_reader()` and decodes with `charset::decode`, whose
+#   cp1252/utf-16 tables are the ones the tests pin. Unused code that can only
+#   mis-decode is not a capability; it is surface.
+# * `brotli`, `json`, `cookies`, `socks-proxy`, `native-tls`, `multipart`,
+#   `platform-verifier` were never on: `default-features = false` keeps it that way.
+ureq = { version = "=3.5.2", default-features = false, features = ["rustls"] }
+url = { version = "=2.5.9", default-features = false, features = ["std"] }
+# tokio's default feature set is empty; naming it `false` plus the list below means a
+# future default cannot add a runtime facility the app did not ask for. Two binaries run
+# on it: `atlas start` (signals, child processes) and the agent (`atlas-monitor serve`,
+# timers and threads). The window is not one of them and does not link it.
+tokio = { version = "=1.54.1", default-features = false, features = ["rt-multi-thread", "net", "macros", "time", "signal", "sync", "io-util"] }
+
+# One profile for every binary, and it lives here: a `[profile.*]` table in a
+# member manifest is *ignored* by cargo (with nothing but a warning), so a member
+# that declared one was claiming hardening this build never applied. `panic =
+# abort` keeps unwind tables — which carry a page's text — out of a crash report;
+# `strip` keeps the symbol names out of the shipped binary.
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
